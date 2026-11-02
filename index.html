@@ -268,7 +268,7 @@
 
     <div style="margin: 14px 0; display:flex; gap:10px; flex-wrap:wrap;">
       <button type="button" class="btn" onclick="calcular()">Calcular orçamento</button>
-      <button type="button" class="btn btn-sec" onclick="salvarOrcamento()">Salvar no histórico</button>
+      <button type="button" class="btn btn-sec" onclick="salvarOrcamento()">Salvar no banco de dados</button>
     </div>
 
     <div class="card resultado" id="painelResultado" style="display:none;">
@@ -291,7 +291,7 @@
     <div class="card">
       <h2>Orçamentos salvos</h2>
       <p style="margin-bottom:12px;font-size:0.85rem;color:#666;">
-        Salvos no navegador (localStorage) — versão futura usará banco de dados.
+        Salvos no banco de dados do Supabase.
       </p>
       <ul class="lista-hist" id="listaHistorico"></ul>
       <button type="button" class="btn btn-sec" onclick="limparHistorico()" style="margin-top:10px;">
@@ -313,10 +313,10 @@
     <div class="card">
       <h2>Tecnologias (protótipo atual)</h2>
       <p><span class="tag">HTML5</span><span class="tag">CSS3</span><span class="tag">JavaScript</span>
-         <span class="tag">localStorage</span></p>
+         <span class="tag">Supabase</span></p>
       <p style="margin-top:8px;font-size:0.85rem;color:#555;">
-        Na versão final do PI: framework web, banco de dados, API, nuvem, testes e controle de versão
-        (conforme tema norteador da UNIVESP).
+        O cálculo acontece no navegador. Os orçamentos salvos ficam no banco de dados
+        do Supabase (PostgreSQL), pela API do serviço.
       </p>
     </div>
   </section>
@@ -325,6 +325,7 @@
 
 <footer>Protótipo acadêmico — PI2 UNIVESP · Grupo PJI240</footer>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
   // --- Menu ---
   const menu = document.getElementById('menu');
@@ -414,39 +415,70 @@
     };
   }
 
-  // --- Histórico (localStorage) ---
-  const CHAVE = 'orcamentos_mdf_pi2';
+  // --- Histórico (Supabase) ---
+  const sb = supabase.createClient(
+    'https://vgujvvexjxhavxifimac.supabase.co',
+    'sb_publishable_9Kk64PBqgKgwhnc6eXZKZQ_Cf9k447f'
+  );
 
-  function salvarOrcamento() {
+  function escapar(texto) {
+    return String(texto == null ? '' : texto)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  async function salvarOrcamento() {
     if (!ultimoResultado) { calcular(); }
     if (!ultimoResultado) return;
-    const lista = JSON.parse(localStorage.getItem(CHAVE) || '[]');
-    lista.unshift(ultimoResultado);
-    if (lista.length > 20) lista.pop();
-    localStorage.setItem(CHAVE, JSON.stringify(lista));
-    alert('Orçamento salvo!');
+    const { error } = await sb.from('orcamentos').insert({
+      cliente: ultimoResultado.cliente,
+      descricao: ultimoResultado.descricao,
+      area: Number(ultimoResultado.area),
+      chapas: ultimoResultado.chapas,
+      material: ultimoResultado.material,
+      mao_obra: ultimoResultado.maoObra,
+      venda: ultimoResultado.venda,
+      vista: ultimoResultado.vista,
+      data_registro: ultimoResultado.data
+    });
+    if (error) {
+      alert('Não foi possível salvar no servidor: ' + error.message);
+      return;
+    }
+    alert('Orçamento salvo no banco de dados!');
     irPara('historico');
   }
 
-  function renderizarHistorico() {
-    const lista = JSON.parse(localStorage.getItem(CHAVE) || '[]');
+  async function renderizarHistorico() {
     const ul = document.getElementById('listaHistorico');
-    if (lista.length === 0) {
+    ul.innerHTML = '<li class="vazio">Carregando orçamentos do banco de dados...</li>';
+    const { data, error } = await sb.from('orcamentos').select('*').order('criado_em', { ascending: false });
+    if (error) {
+      ul.innerHTML = '<li class="vazio">Não foi possível ler o servidor.</li>';
+      return;
+    }
+    if (!data || data.length === 0) {
       ul.innerHTML = '<li class="vazio">Nenhum orçamento salvo ainda.</li>';
       return;
     }
-    ul.innerHTML = lista.map(function(item, i) {
-      return '<li><div><strong>' + item.cliente + '</strong> — ' + item.descricao +
-        '<br><small>' + item.data + ' · ' + item.area + ' m² · ' + item.chapas + ' chapas</small></div>' +
-        '<strong>' + moeda(item.venda) + '</strong></li>';
+    ul.innerHTML = data.map(function(item) {
+      const area = Number(item.area || 0).toFixed(3);
+      return '<li><div><strong>' + escapar(item.cliente) + '</strong> — ' + escapar(item.descricao) +
+        '<br><small>' + escapar(item.data_registro) + ' · ' + area + ' m² · ' + escapar(item.chapas) + ' chapas</small></div>' +
+        '<strong>' + moeda(Number(item.venda)) + '</strong></li>';
     }).join('');
   }
 
-  function limparHistorico() {
-    if (confirm('Apagar todos os orçamentos salvos?')) {
-      localStorage.removeItem(CHAVE);
-      renderizarHistorico();
+  async function limparHistorico() {
+    if (!confirm('Apagar todos os orçamentos salvos no banco de dados?')) return;
+    const { error } = await sb.from('orcamentos').delete().not('id', 'is', null);
+    if (error) {
+      alert('Não foi possível limpar o servidor: ' + error.message);
+      return;
     }
+    renderizarHistorico();
   }
 
   window.addEventListener('load', function() {
